@@ -11,12 +11,35 @@ import sys
 import os
 import re
 import base64
+import threading
 import traceback
 from datetime import datetime, timezone
 from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=False)
+
+# ── Shutdown ───────────────────────────────────────────────────────────────────
+# Quest work runs in worker threads (asyncio.to_thread). Those threads hold the
+# interpreter open, so a panel stop waits for a 15-minute PLAY_ON_DESKTOP cycle
+# unless something interrupts the sleeps. Must derive from BaseException so the
+# broad `except Exception` blocks around HTTP calls do not swallow it.
+SHUTDOWN = threading.Event()
+
+
+class ShutdownRequested(BaseException):
+    """Raised inside quest work when the host asked the process to stop."""
+
+
+def request_shutdown() -> None:
+    SHUTDOWN.set()
+
+
+def wait_or_abort(seconds: float) -> None:
+    """Sleep, but wake immediately once shutdown has been requested."""
+    if SHUTDOWN.wait(max(0.0, seconds)):
+        raise ShutdownRequested()
+
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 API_BASE = "https://discord.com/api/v9"
@@ -329,7 +352,7 @@ class QuestAutocompleter:
             elif r.status_code == 429:
                 retry_after = r.json().get("retry_after", 10)
                 log(f"Rate limited – chờ {retry_after}s", "warn")
-                time.sleep(retry_after)
+                wait_or_abort(retry_after)
                 return self.fetch_quests()
             else:
                 log(f"Quest fetch lỗi ({r.status_code}): {r.text[:200]}", "warn")
@@ -365,7 +388,7 @@ class QuestAutocompleter:
                     retry_after = r.json().get("retry_after", 5)
                     wait = retry_after + 1
                     log(f"Rate limited nhận \"{name}\" (lần {attempt}/3) – chờ {wait}s", "warn")
-                    time.sleep(wait)
+                    wait_or_abort(wait)
                     continue
 
                 if r.status_code in (200, 201, 204):
@@ -398,9 +421,9 @@ class QuestAutocompleter:
 
         for q in unaccepted:
             self.enroll_quest(q)
-            time.sleep(3)
+            wait_or_abort(3)
 
-        time.sleep(2)
+        wait_or_abort(2)
         return self.fetch_quests()
 
     # ── Complete: WATCH_VIDEO ──────────────────────────────────────────────────
@@ -442,7 +465,7 @@ class QuestAutocompleter:
                     elif r.status_code == 429:
                         retry_after = r.json().get("retry_after", 5)
                         log(f"  Rate limited – chờ {retry_after + 1}s", "warn")
-                        time.sleep(retry_after + 1)
+                        wait_or_abort(retry_after + 1)
                         continue
                     else:
                         log(f"  Video progress lỗi ({r.status_code}): {r.text[:200]}", "warn")
@@ -451,7 +474,7 @@ class QuestAutocompleter:
 
             if timestamp >= seconds_needed:
                 break
-            time.sleep(interval)
+            wait_or_abort(interval)
 
         try:
             self.api.post(f"/quests/{qid}/video-progress", {"timestamp": seconds_needed})
@@ -497,7 +520,7 @@ class QuestAutocompleter:
                 elif r.status_code == 429:
                     retry_after = r.json().get("retry_after", 10)
                     log(f"  Rate limited – chờ {retry_after + 1}s", "warn")
-                    time.sleep(retry_after + 1)
+                    wait_or_abort(retry_after + 1)
                     continue
                 else:
                     log(f"  Heartbeat lỗi ({r.status_code}): {r.text[:200]}", "warn")
@@ -505,7 +528,7 @@ class QuestAutocompleter:
             except Exception as e:
                 log(f"  Lỗi heartbeat: {e}", "error")
 
-            time.sleep(HEARTBEAT_INTERVAL)
+            wait_or_abort(HEARTBEAT_INTERVAL)
 
         try:
             self.api.post(f"/quests/{qid}/heartbeat", {
@@ -551,14 +574,14 @@ class QuestAutocompleter:
                 elif r.status_code == 429:
                     retry_after = r.json().get("retry_after", 10)
                     log(f"  Rate limited – chờ {retry_after + 1}s", "warn")
-                    time.sleep(retry_after + 1)
+                    wait_or_abort(retry_after + 1)
                     continue
                 else:
                     log(f"  Heartbeat lỗi ({r.status_code}): {r.text[:200]}", "warn")
             except Exception as e:
                 log(f"  Lỗi: {e}", "error")
 
-            time.sleep(HEARTBEAT_INTERVAL)
+            wait_or_abort(HEARTBEAT_INTERVAL)
 
         try:
             self.api.post(f"/quests/{qid}/heartbeat", {
@@ -595,6 +618,25 @@ class QuestAutocompleter:
 
     # ── One scan cycle ─────────────────────────────────────────────────────────
     def scan_once(self, dry_run: bool = False) -> dict:
+        """Public entry: a shutdown mid-cycle returns a summary, never a crash."""
+        try:
+            return self._run_cycle(dry_run)
+        except ShutdownRequested:
+            log("Chu kỳ dừng giữa đường vì tiến trình đang tắt.", "warn")
+            return {
+                "total": 0,
+                "enrolled": 0,
+                "completed": 0,
+                "completable": 0,
+                "items": [],
+                "pending_accept": [],
+                "pending_complete": [],
+                "completed_now": [],
+                "dry_run": dry_run,
+                "error": "shutdown",
+            }
+
+    def _run_cycle(self, dry_run: bool = False) -> dict:
         """Scan, report, and (unless dry_run) accept + complete.
 
         Returns a plain-data summary so a caller with no knowledge of the quest

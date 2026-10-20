@@ -136,6 +136,14 @@ class DiscordBot(discord.Client):
         self._ping_task = await health.start_ping(self, QUEST_SERVICE)
 
     async def close(self):
+        # Quest work runs in threads that would otherwise outlive the gateway
+        # and keep the container alive for a whole 15-minute heartbeat cycle.
+        try:
+            import main as quest_engine
+
+            quest_engine.request_shutdown()
+        except Exception as exc:  # import cycle or partial install
+            log.warning('Could not signal quest shutdown: %s', exc)
         runner = getattr(self, '_health_runner', None)
         if runner is not None:
             self._health_runner = None
