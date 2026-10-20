@@ -132,11 +132,18 @@ class DiscordBot(discord.Client):
             self._health_runner = None
             log.warning('Health endpoint disabled (port busy?): %s', exc)
 
+        # Optional outbound heartbeat: works behind NAT, no open port needed.
+        self._ping_task = await health.start_ping(self, QUEST_SERVICE)
+
     async def close(self):
         runner = getattr(self, '_health_runner', None)
         if runner is not None:
             self._health_runner = None
             await runner.cleanup()
+        ping = getattr(self, '_ping_task', None)
+        if ping is not None and not ping.done():
+            self._ping_task = None
+            ping.cancel()
         await super().close()
 
     async def on_ready(self):

@@ -118,6 +118,15 @@ Trả về:
 
 `status:ok` = gateway đã READY. Gắn `HEALTH_PORT` mà panel không mở port thì bot ghi warning và chạy tiếp — không sập vì health.
 
+**Host không mở port?** Dùng nhịp tim gọi ra, không cần expose gì:
+
+```env
+HEALTHCHECK_URL=https://hc-ping.com/<uuid>
+HEALTHCHECK_INTERVAL=300
+```
+
+Bot POST trạng thái lên đó mỗi 5 phút. healthchecks.io im lặng quá 10 phút là gửi mail/Telegram. Chạy được sau mọi NAT, firewall, panel không cấp port.
+
 ---
 
 ## Mục lục
