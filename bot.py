@@ -1,9 +1,10 @@
 """Discord bot — slash commands, guild-scoped sync, cloud-ready.
 
 Environment:
-    DISCORD_TOKEN  required, bot token from the Developer Portal
-    GUILD_ID       optional, sync slash commands to this guild instantly
-                   (global sync can take up to 1 hour to propagate)
+    DISCORD_TOKEN       required, bot token from the Developer Portal
+    GUILD_ID            optional, sync slash commands to this guild instantly
+                        (global sync can take up to 1 hour to propagate)
+    DISCORD_GUILD_ID    alias accepted, used by botkeep.cloud panels
 """
 
 import logging
@@ -56,7 +57,11 @@ def setup_logging() -> logging.Logger:
 
 log = setup_logging()
 
-GUILD_ID_RAW = os.environ.get('GUILD_ID', '').strip()
+# Panels name this differently; accept both so a deploy never silently falls
+# back to slow global sync.
+GUILD_ID_RAW = (
+    os.environ.get('GUILD_ID') or os.environ.get('DISCORD_GUILD_ID') or ''
+).strip()
 
 
 class DiscordBot(discord.Client):
