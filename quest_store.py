@@ -188,3 +188,30 @@ class UserStore:
 
     def known_users(self) -> int:
         return len(self._users)
+
+    # ── auto-start ─────────────────────────────────────────────────────────────
+    def set_auto(self, user_id: int, enabled: bool, channel_id: Optional[int] = None) -> None:
+        """Remember whether this user's worker should resume after a restart."""
+        record = self._users.get(str(user_id))
+        if not record:
+            return
+        record['auto_start'] = bool(enabled)
+        if channel_id is not None:
+            record['channel_id'] = int(channel_id)
+        self._flush()
+
+    def auto_users(self) -> list:
+        """[(user_id, channel_id)] for every login that asked to resume."""
+        result = []
+        for key, record in self._users.items():
+            if not record.get('auto_start') or not record.get('token'):
+                continue
+            if not str(key).isdigit():
+                continue
+            channel = record.get('channel_id')
+            result.append((int(key), int(channel) if isinstance(channel, int) else None))
+        return result
+
+    def get_auto(self, user_id: int) -> bool:
+        record = self._users.get(str(user_id)) or {}
+        return bool(record.get('auto_start'))

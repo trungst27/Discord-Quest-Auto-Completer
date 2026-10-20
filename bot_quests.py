@@ -272,6 +272,28 @@ class QuestService:
                 'user': response.json() if response.status_code == 200 else None,
             }
 
+    # ── resume after restart ───────────────────────────────────────────────────
+    async def resume(self, client: discord.Client) -> int:
+        """Restart workers for logins that had one running before the restart."""
+        if self.reason_unavailable():
+            return 0
+        started = 0
+        for user_id, channel_id in self.store.auto_users():
+            session = self.session(user_id)
+            if session is None or session.running:
+                continue
+            channel = client.get_channel(channel_id) if channel_id else None
+            owner = client.get_user(user_id) or f'<@{user_id}>'
+            session.started_at = discord.utils.utcnow()
+            session._worker = asyncio.create_task(
+                _worker_loop(self, session, channel, owner),
+                name=f'quest-worker-{user_id}',
+            )
+            started += 1
+        if started:
+            log.info('Resumed %d quest worker(s) after restart.', started)
+        return started
+
 
 async def _cancel(task: Optional[asyncio.Task]) -> None:
     if task is None or task.done():
@@ -330,14 +352,15 @@ def scan_embed(summary: dict, show_completed: bool = True) -> discord.Embed:
     return embed
 
 
-def completed_embed(names: list, owner: discord.abc.User) -> discord.Embed:
+def completed_embed(names: list, owner=None) -> discord.Embed:
     embed = discord.Embed(
         title='Quest hoàn thành',
         description='\n'.join(f'✓ **{name}**' for name in names[:MAX_QUEST_FIELDS]),
         colour=discord.Colour.green(),
         timestamp=discord.utils.utcnow(),
     )
-    embed.set_footer(text=f'của {owner}')
+    if owner is not None:
+        embed.set_footer(text=f'của {owner}')
     return embed
 
 
@@ -358,7 +381,7 @@ def settings_embed(session: UserSession) -> discord.Embed:
     return embed
 
 
-def status_embed(session: UserSession) -> discord.Embed:
+def status_embed(session: UserSession, auto_resume: bool = False) -> discord.Embed:
     running = session.running
     colour = discord.Colour.green() if running else discord.Colour.greyple()
     embed = discord.Embed(title='Quest worker', colour=colour)
@@ -370,6 +393,7 @@ def status_embed(session: UserSession) -> discord.Embed:
     lines.append(f'**Lần quét:** {session.scans}')
     lines.append(f'**Quest đã xong:** {session.completed_total}')
     lines.append(f"**Auto-accept:** {'on' if session.settings['auto_accept'] else 'off'}")
+    lines.append(f"**Tự bật lại sau restart:** {'on' if auto_resume else 'off'}")
     if session.last_at:
         lines.append(f"**Quét gần nhất:** <t:{int(session.last_at.timestamp())}:R>")
     if session.last_error:
@@ -556,11 +580,16 @@ def register(tree: app_commands.CommandTree, owner_check) -> QuestService:
             _worker_loop(service, session, channel, interaction.user),
             name=f'quest-worker-{session.user_id}',
         )
+        service.store.set_auto(
+            session.user_id,
+            True,
+            getattr(interaction.channel, 'id', None),
+        )
         await interaction.response.send_message(
             f'Đã bật auto-scan: quét mỗi **{session.interval}s**, '
             f"auto-accept **{'on' if session.settings['auto_accept'] else 'off'}**, "
             f"thông báo **{'on' if notify else 'off'}**.\n"
-            'Quest chơi/stream chạy đúng bằng thời lượng thật.',
+            'Worker tự bật lại sau khi bot restart.',
             ephemeral=True,
         )
 
@@ -577,6 +606,8 @@ def register(tree: app_commands.CommandTree, owner_check) -> QuestService:
         await _cancel(session._oneshot)
         session._worker = None
         session._oneshot = None
+        if service.store is not None:
+            service.store.set_auto(session.user_id, False)
         await interaction.followup.send('Đã dừng auto-scan.', ephemeral=True)
 
     @quest.command(name='status', description='Xem trạng thái auto-scan của bạn')
@@ -584,7 +615,13 @@ def register(tree: app_commands.CommandTree, owner_check) -> QuestService:
         session = await get_session(interaction)
         if session is None:
             return
-        await interaction.response.send_message(embed=status_embed(session), ephemeral=True)
+        await interaction.response.send_message(
+            embed=status_embed(
+                session,
+                auto_resume=service.store.get_auto(session.user_id) if service.store else False,
+            ),
+            ephemeral=True,
+        )
 
     @quest.command(name='run', description='Chạy một chu kỳ đầy đủ ngay: nhận + hoàn thành')
     async def quest_run(interaction: discord.Interaction):

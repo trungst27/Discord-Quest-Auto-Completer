@@ -137,6 +137,9 @@ class DiscordBot(discord.Client):
                 'Quest commands ready; %d user login(s) stored.',
                 QUEST_SERVICE.store.known_users() if QUEST_SERVICE.store else 0,
             )
+            if not getattr(self, '_quest_resumed', False):
+                self._quest_resumed = True
+                await QUEST_SERVICE.resume(self)
         else:
             log.warning(
                 'Quest commands unavailable: %s. /scan and /quest will explain the fix.',
