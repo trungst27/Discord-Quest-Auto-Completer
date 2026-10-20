@@ -17,6 +17,10 @@ requirements-bot.txt   bắt buộc
 
 `.env` **không** đưa lên repo — token nhập vào panel, mục **Environment / Secrets**.
 
+> **Repo private:** link GitHub private trả 404 với người chưa đăng nhập, nên panel **không thể** clone bằng URL trần. Theo tài liệu Botkeep: *"Private repositories require an authorised installation."* Phải vào tab **GitHub → Connect account** và cài **Botkeep GitHub App** cho repo đó.
+>
+> Không muốn cấp quyền app? Dùng **ZIP archive** — không cần auth, deploy được repo private, chỉ mất tính năng auto-update theo commit.
+
 ### Đẩy lên GitHub
 
 ```powershell
