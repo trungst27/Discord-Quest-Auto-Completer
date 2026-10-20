@@ -6,6 +6,36 @@ Công cụ tự động quét, nhận và hoàn thành các Quest trên Discord.
 
 ---
 
+## Repo này có hai thành phần
+
+| Thành phần | File | Token cần | Chạy ở đâu |
+|---|---|---|---|
+| **Discord bot** (slash commands) | `bot.py` | **bot token** | máy local / [botkeep.cloud](https://botkeep.cloud) |
+| **Quest tool** (auto-complete) | `main.py` | **user token** | máy local / panel VPS |
+
+Hai loại token khác nhau, đừng trộn: bot token gọi `/users/@me` với header `Bot ...`, user token gọi `/quests/@me`.
+
+### Bắt đầu nhanh với bot
+
+```powershell
+.\setup-bot.ps1      # cài đặt một lần: venv, deps, token, scheduled task
+.\status-bot.ps1     # xem trạng thái
+.\teardown-bot.ps1   # gỡ sạch
+```
+
+| Tài liệu | Nội dung |
+|---|---|
+| [BOT-SETUP.md](BOT-SETUP.md) | chạy bot trên Windows, tự bật lại sau restart |
+| [DEPLOY-BOTKEEP.md](DEPLOY-BOTKEEP.md) | deploy lên botkeep.cloud, sửa lỗi slash command |
+
+### Chạy quest tool
+
+```powershell
+python main.py <USER_TOKEN>
+```
+
+---
+
 ## Mục lục
 
 - [Tính năng](#tính-năng)
