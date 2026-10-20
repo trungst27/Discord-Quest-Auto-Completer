@@ -14,6 +14,9 @@ import base64
 import traceback
 from datetime import datetime, timezone
 from typing import Optional
+from dotenv import load_dotenv
+
+load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=False)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 API_BASE = "https://discord.com/api/v9"
@@ -171,11 +174,20 @@ class DiscordAPI:
             r = self.get("/users/@me")
             if r.status_code == 200:
                 user = r.json()
+                if user.get("bot"):
+                    log(
+                        "Đây là BOT token, không dùng cho quest. Quest cần USER token "
+                        "(Developer Portal không cấp token này).",
+                        "error",
+                    )
+                    return False
                 name = user.get("username", "?")
                 log(f"Đăng nhập: {Colors.BOLD}{name}{Colors.RESET} (ID: {user['id']})", "ok")
                 return True
             else:
                 log(f"Token không hợp lệ (status {r.status_code})", "error")
+                if r.status_code == 401:
+                    log("Token đã hết hạn hoặc bị đăng xuất. Lấy token mới từ trình duyệt.", "warn")
                 return False
         except Exception as e:
             log(f"Không thể kết nối tới Discord: {e}", "error")
@@ -575,10 +587,14 @@ class QuestAutocompleter:
         self.completed_ids.add(qid)
 
     # ── Main loop ──────────────────────────────────────────────────────────────
-    def run(self):
+    def run(self, once: bool = False, dry_run: bool = False):
         log("=" * 60, "info")
-        log(f"{Colors.BOLD}Discord Quest Auto-Completer v3.0{Colors.RESET}", "info")
+        log(f"{Colors.BOLD}Discord Quest Auto-Completer v3.1{Colors.RESET}", "info")
         log(f"Auto-accept: {'BẬT' if AUTO_ACCEPT else 'TẮT'}  |  Poll: {POLL_INTERVAL}s", "info")
+        if dry_run:
+            log(f"{Colors.YELLOW}DRY RUN{Colors.RESET} – chỉ quét và in kế hoạch, không nhận/không hoàn thành", "warn")
+        if once:
+            log("Chế độ một lần – quét xong thoát", "info")
         log("=" * 60, "info")
 
         cycle = 0
@@ -613,29 +629,100 @@ class QuestAutocompleter:
                         status = f"{Colors.DIM}○{Colors.RESET}"
                     log(f"  {status} {name} [{task}]", "info")
 
-                # Auto-accept
-                quests = self.auto_accept(quests)
-
-                # Filter actionable
-                actionable = [
-                    q for q in quests
-                    if is_enrolled(q) and not is_completed(q) and is_completable(q)
-                    and q.get("id") not in self.completed_ids
-                ]
-
-                if actionable:
-                    log(f"\n{len(actionable)} quest(s) cần hoàn thành:", "info")
-                    for q in actionable:
-                        self.process_quest(q)
+                if dry_run:
+                    pending_accept = [
+                        q for q in quests
+                        if not is_enrolled(q) and not is_completed(q) and is_completable(q)
+                    ]
+                    pending_complete = [
+                        q for q in quests
+                        if is_enrolled(q) and not is_completed(q) and is_completable(q)
+                        and q.get("id") not in self.completed_ids
+                    ]
+                    if pending_accept:
+                        log(f"\nDRY RUN: sẽ nhận {len(pending_accept)} quest:", "warn")
+                        for q in pending_accept:
+                            log(f"  + {get_quest_name(q)} [{get_task_type(q)}]", "progress")
+                    if pending_complete:
+                        log(f"\nDRY RUN: sẽ hoàn thành {len(pending_complete)} quest:", "warn")
+                        for q in pending_complete:
+                            done = get_seconds_done(q)
+                            need = get_seconds_needed(q)
+                            log(f"  ~ {get_quest_name(q)} ({done:.0f}/{need}s)", "progress")
+                    if not pending_accept and not pending_complete:
+                        log("DRY RUN: không có gì để làm", "info")
                 else:
-                    log("Không có quest nào cần hoàn thành lúc này", "info")
+                    # Auto-accept
+                    quests = self.auto_accept(quests)
+
+                    # Filter actionable
+                    actionable = [
+                        q for q in quests
+                        if is_enrolled(q) and not is_completed(q) and is_completable(q)
+                        and q.get("id") not in self.completed_ids
+                    ]
+
+                    if actionable:
+                        log(f"\n{len(actionable)} quest(s) cần hoàn thành:", "info")
+                        for q in actionable:
+                            self.process_quest(q)
+                    else:
+                        log("Không có quest nào cần hoàn thành lúc này", "info")
+
+            if once:
+                break
 
             log(f"\nChờ {POLL_INTERVAL}s... (Ctrl+C để dừng)\n", "info")
             time.sleep(POLL_INTERVAL)
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
+def parse_args(argv):
+    """Tiny flag parser: POSIX-style flags only, no external dependency."""
+    opts = {"token": None, "once": False, "dry_run": False, "interval": None}
+    i = 1
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-h", "--help"):
+            print(__doc__)
+            print(
+                "Usage: python main.py [TOKEN] [--once] [--dry-run] [--interval N]\n"
+                "\n"
+                "  --once         quét một lần rồi thoát\n"
+                "  --dry-run      chỉ quét và in kế hoạch, không nhận/không hoàn thành\n"
+                "  --interval N   giây giữa các lần quét (mặc định 60)\n"
+                "\n"
+                "Token lấy theo thứ tự: tham số dòng lệnh -> QUEST_TOKEN -> USER_TOKEN\n"
+                "-> DISCORD_TOKEN -> file .token -> nhập tay.\n"
+                "Quest cần USER token, KHÔNG phải bot token."
+            )
+            sys.exit(0)
+        elif arg == "--once":
+            opts["once"] = True
+        elif arg == "--dry-run":
+            opts["dry_run"] = True
+        elif arg == "--interval":
+            if i + 1 >= len(argv):
+                log("--interval cần một số giây.", "error")
+                sys.exit(2)
+            try:
+                opts["interval"] = int(argv[i + 1])
+            except ValueError:
+                log("--interval phải là số nguyên.", "error")
+                sys.exit(2)
+            i += 1
+        elif arg.startswith("-"):
+            log(f"Cờ không hợp lệ: {arg}", "error")
+            sys.exit(2)
+        else:
+            opts["token"] = arg.strip()
+        i += 1
+    return opts
+
+
 def main():
+    global POLL_INTERVAL
+
     print(f"""
 {Colors.BOLD}{Colors.CYAN}╔══════════════════════════════════════════════╗
 ║     Discord Quest Auto-Completer.            ║
@@ -643,17 +730,31 @@ def main():
 ╚══════════════════════════════════════════════╝{Colors.RESET}
 """)
 
-    if len(sys.argv) > 1:
-        token = sys.argv[1].strip()
-    elif os.path.exists(".token"):
-        with open(".token", "r") as f:
+    opts = parse_args(sys.argv)
+    if opts["interval"]:
+        POLL_INTERVAL = opts["interval"]
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Quest endpoints need a USER token. Keep it in its own variable so a bot
+    # token sitting in DISCORD_TOKEN (the bot's env) never gets used by mistake.
+    token = opts["token"]
+    if not token:
+        for env_key in ("QUEST_TOKEN", "USER_TOKEN", "DISCORD_TOKEN"):
+            value = os.environ.get(env_key, "").strip()
+            if value:
+                token = value
+                log(f"Đọc token từ Environment ({env_key}).", "info")
+                break
+    if not token and os.path.exists(os.path.join(base_dir, ".token")):
+        with open(os.path.join(base_dir, ".token"), "r", encoding="utf-8") as f:
             token = f.read().strip()
         log("Đọc token từ file .token", "info")
-    else:
+    if not token and sys.stdin.isatty():
         token = input(f"{Colors.BOLD}Nhập Discord Token: {Colors.RESET}").strip()
 
     if not token:
-        log("Token trống – thoát.", "error")
+        log("Thiếu token. Đặt QUEST_TOKEN trong .env hoặc truyền tham số.", "error")
         sys.exit(1)
 
     build_number = fetch_latest_build_number()
@@ -665,7 +766,7 @@ def main():
     completer = QuestAutocompleter(api)
 
     try:
-        completer.run()
+        completer.run(once=opts["once"], dry_run=opts["dry_run"])
     except KeyboardInterrupt:
         print()
         log("Đã dừng.", "info")
