@@ -87,10 +87,28 @@ class DiscordBot(discord.Client):
         super().__init__(intents=discord.Intents.default())
         self.tree = app_commands.CommandTree(self)
 
+    async def _purge_global_commands(self) -> None:
+        """Delete global commands so guild-scoped ones are not listed twice.
+
+        Discord shows the union of global and guild command sets. Syncing to a
+        guild while globals still exist renders every command twice, so the
+        stale global set is wiped once at startup. The in-memory tree is left
+        untouched, which keeps copy_global_to() working for new guilds.
+        """
+        try:
+            existing = await self.http.get_global_commands(self.application_id)
+            if not existing:
+                return
+            await self.http.bulk_upsert_global_commands(self.application_id, payload=[])
+            log.info('Cleared %d stale global command(s).', len(existing))
+        except discord.HTTPException as exc:
+            log.warning('Global command purge skipped: %s', exc)
+
     async def setup_hook(self):
         """Guild sync is instant; global sync can lag up to an hour."""
         try:
             if GUILD_ID_RAW:
+                await self._purge_global_commands()
                 guild = discord.Object(id=int(GUILD_ID_RAW))
                 self.tree.copy_global_to(guild=guild)
                 synced = await self.tree.sync(guild=guild)
