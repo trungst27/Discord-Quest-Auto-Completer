@@ -17,6 +17,8 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 
+import health
+
 BASE_DIR = Path(__file__).resolve().parent
 LOG_DIR = BASE_DIR / 'logs'
 
@@ -123,8 +125,25 @@ class DiscordBot(discord.Client):
         except discord.HTTPException as exc:
             log.error('Slash command sync failed: %s', exc)
 
+        # Optional uptime endpoint: only binds when HEALTH_PORT is set.
+        try:
+            self._health_runner = await health.start(self, QUEST_SERVICE)
+        except OSError as exc:
+            self._health_runner = None
+            log.warning('Health endpoint disabled (port busy?): %s', exc)
+
+    async def close(self):
+        runner = getattr(self, '_health_runner', None)
+        if runner is not None:
+            self._health_runner = None
+            await runner.cleanup()
+        await super().close()
+
     async def on_ready(self):
         global STARTED_AT
+        state = getattr(self, 'health_state', None)
+        if state is not None:
+            state.ready = True
         if STARTED_AT is None:
             STARTED_AT = discord.utils.utcnow()
         log.info('READY: %s (ID: %s) — %d guild(s)', self.user, self.user.id, len(self.guilds))

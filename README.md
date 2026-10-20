@@ -95,6 +95,29 @@ Ra `TOKEN VALID` + danh sách lệnh = token đúng. Ra `401 Unauthorized` = tok
 python main.py <USER_TOKEN>
 ```
 
+### Giám sát uptime
+
+Bot tự bật lại sau khi restart và worker tự resume, nhưng không ai biết nếu tiến trình chết hẳn. Bật endpoint để dịch vụ ngoài dò:
+
+```env
+HEALTH_PORT=8080
+```
+
+Rồi trỏ UptimeRobot / BetterStack vào:
+
+```
+http://<host-panel>:<port>/health
+```
+
+Trả về:
+
+```json
+{"status":"ok","bot":"SBLT Auto Quest#3521","guilds":1,"latency_ms":42,
+ "users":1,"workers":1,"uptime_s":3600}
+```
+
+`status:ok` = gateway đã READY. Gắn `HEALTH_PORT` mà panel không mở port thì bot ghi warning và chạy tiếp — không sập vì health.
+
 ---
 
 ## Mục lục
