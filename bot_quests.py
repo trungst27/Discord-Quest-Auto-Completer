@@ -413,6 +413,7 @@ def status_embed(session: UserSession, auto_resume: bool = False) -> discord.Emb
     lines.append(f'**Lần quét:** {session.scans}')
     lines.append(f'**Quest đã xong:** {session.completed_total}')
     lines.append(f"**Auto-accept:** {'on' if session.settings['auto_accept'] else 'off'}")
+    lines.append(f"**Thông báo DM:** {'on' if session.notify_user is not None else 'off'}")
     lines.append(f"**Tự bật lại sau restart:** {'on' if auto_resume else 'off'}")
     if session.last_at:
         lines.append(f"**Quét gần nhất:** <t:{int(session.last_at.timestamp())}:R>")
@@ -638,7 +639,17 @@ def register(tree: app_commands.CommandTree, owner_check) -> QuestService:
         session._oneshot = None
         if service.store is not None:
             service.store.set_auto(session.user_id, False)
+        wants_dm = session.notify_user is not None
+        session.notify_user = None
+        session.dm_reporter = None
         await interaction.followup.send('Đã dừng auto-scan.', ephemeral=True)
+        if wants_dm:
+            try:
+                await interaction.user.send(
+                    'Quest • Đã dừng auto-scan. Bật lại bằng `/quest start`.'
+                )
+            except discord.HTTPException:
+                pass
 
     @quest.command(name='status', description='Xem trạng thái auto-scan của bạn')
     async def quest_status(interaction: discord.Interaction):
@@ -761,8 +772,14 @@ async def _worker_loop(service: QuestService, session: UserSession, channel, own
             try:
                 summary = await service.scan(session, dry_run=False)
                 done = summary.get('completed_now') or []
-                if done and channel is not None:
-                    await channel.send(embed=completed_embed(done, owner))
+                if done:
+                    # DM first: the per-user reporter is the default path now.
+                    target = session.notify_user if session.notify_user is not None else channel
+                    if target is not None:
+                        try:
+                            await target.send(embed=completed_embed(done, owner))
+                        except discord.HTTPException as exc:
+                            log.warning('Completion notice failed for %s: %s', session.user_id, exc)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:

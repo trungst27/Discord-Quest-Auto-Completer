@@ -14,7 +14,7 @@ class ProgressDM:
         self.stage = 'Đang chờ lượt xử lý'
 
     async def update(self, text):
-        if self.disabled:
+        if self.disabled or self.user is None:
             return
         try:
             if self.message is None:
