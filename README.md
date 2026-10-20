@@ -38,16 +38,21 @@ Hai loại token khác nhau, đừng trộn: bot token gọi `/users/@me` với 
 | `/stats` | mọi người |
 | `/help` | mọi người |
 | `/sync` | chỉ owner (`OWNER_IDS`) |
-| `/scan` | chỉ owner — quét quest một lần, chỉ đọc |
-| `/quest start` | chỉ owner — bật worker nền: quét → nhận → hoàn thành |
-| `/quest stop` | chỉ owner — dừng worker |
-| `/quest status` | chỉ owner — trạng thái, số lần quét, lỗi |
-| `/quest run` | chỉ owner — chạy một chu kỳ đầy đủ ngay |
-| `/quest config` | chỉ owner — xem cấu hình |
-| `/quest set` | chỉ owner — sửa `interval`, `heartbeat`, `auto_accept`, `log_progress`, `debug` |
-| `/quest build` | chỉ owner — kiểm tra user token + build number |
+| `/quest login` | mọi người — dán user token của chính mình |
+| `/quest logout` | mọi người — xoá token đã lưu |
+| `/quest whoami` | mọi người — kiểm token + build number |
+| `/scan` | mọi người — quét quest một lần, chỉ đọc |
+| `/quest start` | mọi người — bật worker nền: quét → nhận → hoàn thành |
+| `/quest stop` | mọi người — dừng worker |
+| `/quest status` | mọi người — trạng thái, số lần quét, lỗi |
+| `/quest run` | mọi người — chạy một chu kỳ đầy đủ ngay |
+| `/quest config` | mọi người — xem cấu hình |
+| `/quest set` | mọi người — sửa `interval`, `heartbeat`, `auto_accept`, `log_progress`, `debug` |
+| `/quest users` | chỉ owner — số người đã đăng nhập |
 
-`/scan` và `/quest` gọi API quest, mà API đó là **user-scoped** — bot token nhận `401`. Nên chúng cần biến môi trường `QUEST_TOKEN` (user token), tách hẳn khỏi `DISCORD_TOKEN`. Thiếu biến đó bot vẫn chạy bình thường, hai lệnh chỉ in hướng dẫn cấu hình.
+Quest API là **user-scoped**: `/quests/@me` trả 200 cho user token, 401 cho bot token. Nên mỗi người tự đăng nhập bằng token của mình qua form riêng tư (`/quest login`), bot mã hoá rồi lưu vào `quest-tokens.json`. Không cần `QUEST_TOKEN` trong env nữa.
+
+Token đi qua `quest_store.py`: Fernet, khoá từ `QUEST_SECRET` hoặc file `quest-secret.key` tự sinh. Cả hai file đều gitignored. Token không bao giờ hiện lại trong chat, không nằm trong embed, không ghi log.
 
 Tính năng trong bảng dưới đây chạy được cả hai cách: `main.py` trong terminal, hoặc lệnh Discord.
 
@@ -57,10 +62,9 @@ Tính năng trong bảng dưới đây chạy được cả hai cách: `main.py`
 | Auto Accept | `AUTO_ACCEPT` | `/quest set auto_accept on\|off` |
 | Auto Complete | `process_quest()` | `/quest start`, `/quest run` |
 | Rate Limit Handling | tự chờ 429 | tự động, lỗi ở `/quest status` |
-| Build Number Fetch | `fetch_latest_build_number()` | `/quest build` |
+| Build Number Fetch | `fetch_latest_build_number()` | `/quest whoami` |
 
-Cấu hình đặt bằng `/quest set` được ghi vào `quest-settings.json` và áp vào
-`main.py` trước mỗi chu kỳ:
+Cấu hình `/quest set` lưu theo từng user và áp vào `main.py` trước mỗi chu kỳ:
 
 | Key | Mặc định | Khoảng | Nghĩa |
 |---|---|---|---|
@@ -70,7 +74,7 @@ Cấu hình đặt bằng `/quest set` được ghi vào `quest-settings.json` v
 | `log_progress` | off | on/off | log tiến độ |
 | `debug` | off | on/off | log HTTP |
 
-> **Rủi ro:** user token nằm trên host đồng nghĩa bất kỳ ai đọc được env của panel đều điều khiển được tài khoản Discord của bạn, và dùng user token qua HTTP là trái ToS Discord. Muốn an toàn tuyệt đối thì để `QUEST_TOKEN` trống và chạy `main.py` trên máy mình.
+> **Rủi ro:** token được mã hoá khi lưu, nhưng khoá nằm trên cùng máy chủ — ai chạy được tiến trình bot hoặc đọc được `quest-secret.key` thì giải mã được. Dùng user token qua HTTP cũng là trái ToS Discord, tài khoản có thể bị khoá. Không muốn đặt token lên host thì chạy `main.py` trên máy mình.
 
 > **Token không nằm trong repo.** Bot đọc `DISCORD_TOKEN` từ biến môi trường. Bật chặn commit lộ secret:
 > ```powershell

@@ -178,126 +178,114 @@ Không chạy `main.py` trên botkeep cùng bot — token khác nhau, nhưng pan
 
 ---
 
-## 10. Dùng trong Discord — `/scan` và `/quest`
+## 10. Dùng trong Discord — mỗi người tự đăng nhập
 
-Bot có thêm nhóm lệnh owner-only gọi đúng API mà `main.py` gọi, để khỏi mở terminal.
+Bot không giữ token trong env nữa. Mỗi người dùng `/quest login`, dán **user token của chính mình**, bot mã hoá rồi lưu. Lệnh quest chạy trên đúng tài khoản của người gọi lệnh.
 
-### Bật
-
-Thêm vào env của bot (local `.env` hoặc `Environment` trên botkeep):
+### Đăng nhập
 
 ```
-QUEST_TOKEN=<user token>
+/quest login
 ```
 
-Restart. Log đúng:
+Discord mở form riêng tư. Dán user token vào ô. Bot kiểm tra với Discord trước khi lưu:
+
+- `GET /users/@me` trả 200 và `bot: false` → nhận
+- token thuộc tài khoản khác với người gọi → từ chối
+- token chết → từ chối, kèm mã lỗi
+
+Thành công:
 
 ```
-INFO  bot.quests: Quest client ready (client_build_number=641803).
-INFO  bot: Quest commands enabled (QUEST_TOKEN present).
+Đã lưu token cho SUJILAY.
+Dùng /scan để xem quest, /quest start để chạy nền.
 ```
 
-Thiếu biến đó thì bot vẫn chạy, chỉ log:
+Token **không bao giờ** hiện lại trong chat, không nằm trong embed, không ghi ra log.
+
+### Lưu ở đâu
 
 ```
-WARNING bot: Quest commands disabled: thiếu `QUEST_TOKEN`. /scan and /quest will explain the fix.
+quest-tokens.json    token đã mã hoá (Fernet) + cấu hình
+quest-secret.key     khoá, tạo tự động nếu thiếu QUEST_SECRET
 ```
+
+Cả hai nằm trong `.gitignore`. Muốn khoá do mình giữ thì đặt env:
+
+```powershell
+.\.venv\Scripts\python.exe -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Dán kết quả vào `QUEST_SECRET`. Mất khoá = mọi token đã lưu không giải mã được, người dùng `/quest login` lại.
 
 ### Bảng lệnh
 
 | Lệnh | Việc |
 |---|---|
+| `/quest login` | mở form dán user token |
+| `/quest logout` | xoá token, dừng worker của bạn |
+| `/quest whoami` | kiểm token + build number |
 | `/scan [show_completed]` | quét một lần, chỉ đọc |
 | `/quest start [notify]` | bật worker nền: quét → nhận → hoàn thành |
-| `/quest stop` | dừng worker, huỷ cả one-shot đang chạy |
+| `/quest stop` | dừng worker, huỷ one-shot đang chạy |
 | `/quest status` | trạng thái, số lần quét, lỗi gần nhất |
-| `/quest run` | chạy một chu kỳ đầy đủ ngay (nhận + hoàn thành) |
-| `/quest config` | xem cấu hình hiện tại |
-| `/quest set key value` | sửa cấu hình, lưu vào `quest-settings.json` |
-| `/quest build` | kiểm tra token + build number |
+| `/quest run` | chạy một chu kỳ đầy đủ ngay |
+| `/quest config` | xem cấu hình |
+| `/quest set key value` | sửa cấu hình (lưu theo tài khoản) |
+| `/quest users` | số người đã đăng nhập (owner) |
+
+Mỗi người có cấu hình riêng. Nhiều người chạy cùng lúc thì các chu kỳ API xếp hàng qua một lock chung — `main.py` dùng biến global nên không thể phục vụ hai cấu hình cùng một lúc.
 
 ### Tính năng README ↔ lệnh
 
-| Tính năng trong README | `main.py` | Trong Discord |
+| Tính năng | `main.py` | Trong Discord |
 |---|---|---|
 | **Auto Scan** | `run()` + `POLL_INTERVAL` | `/quest start`, `/quest set interval` |
 | **Auto Accept** | `AUTO_ACCEPT` | `/quest set auto_accept on\|off` |
 | **Auto Complete** | `process_quest()` | `/quest start`, `/quest run` |
-| **Rate Limit Handling** | có sẵn, tự chờ 429 | tự động, lỗi hiện ở `/quest status` |
-| **Build Number Fetch** | `fetch_latest_build_number()` | `/quest build` |
+| **Rate Limit Handling** | tự chờ 429 | tự động, lỗi ở `/quest status` |
+| **Build Number Fetch** | `fetch_latest_build_number()` | `/quest whoami` |
 
 ### Cấu hình
-
-Năm hằng số của `main.py` chỉnh được tại chỗ. Giá trị ghi vào module global
-**trước mỗi chu kỳ**, và lưu ra `quest-settings.json` nên restart vẫn giữ.
 
 | Key | Mặc định | Khoảng | Nghĩa |
 |---|---|---|---|
 | `interval` | 300 | 60–3600 | giây giữa các lần quét |
 | `heartbeat` | 20 | 5–60 | giây giữa heartbeat |
 | `auto_accept` | on | on/off | tự nhận quest mới |
-| `log_progress` | off | on/off | log tiến độ ra console |
-| `debug` | off | on/off | log HTTP chi tiết |
+| `log_progress` | off | on/off | log tiến độ |
+| `debug` | off | on/off | log HTTP |
 
-```
-/quest set interval 120
-/quest set heartbeat 20
-/quest set auto_accept off
-```
+Cấu hình lưu trong `quest-tokens.json` theo từng user.
 
-Giá trị sai bị từ chối ngay, không ghi file:
-
-```
-Giá trị không hợp lệ cho `interval`: phải trong khoảng 60–3600
-Giá trị không hợp lệ cho `auto_accept`: cần `on` hoặc `off`
-```
-
-### `/quest run` khác `/quest start`
-
-`run` chạy **một** chu kỳ rồi dừng — tiện test thật. Nó chạy nền nên không treo
-interaction, nhưng quest `PLAY_ON_DESKTOP` 15 phút thì chờ đủ 15 phút mới có kết quả.
-`start` thì lặp mãi cho tới khi `stop`.
-
-Chỉ một lượt chạy tại một thời điểm: `start` lần hai, hoặc `run` khi worker đang
-chạy, đều bị từ chối.
-
-### `/quest build` — chẩn đoán token
+### `/quest whoami` — chẩn đoán
 
 ```
 Quest credentials
 client_build_number   641803
 GET /users/@me        200
-Token                 72 ký tự
+Token đã lưu          72 ký tự
 
 Đăng nhập: SUJILAY (stchan06 · ID 1482005776469069927)
 ```
 
-Token chết:
-
-```
-GET /users/@me        401
-Lỗi: Token chết hoặc bị đăng xuất. Lấy token mới từ trình duyệt.
-```
-
-Nếu token là bot token, embed sẽ ghi rõ `Sai loại token`.
+Token chết → ô đỏ, `401`, kèm nhắc `/quest login` lại.
 
 ### Lỗi thường gặp
 
 | Log / embed | Nghĩa | Sửa |
 |---|---|---|
-| `Quest chưa cấu hình — thiếu QUEST_TOKEN` | env trống | thêm biến, restart |
-| `Lỗi fetch: HTTP 401` | token chết | `/quest build` xác nhận, lấy token mới |
-| `Quest fetch lỗi (403)` | token bị hạn chế | đăng nhập lại trên web, lấy token mới |
-| `Worker đang chạy` | start hai lần | `/quest stop` trước |
-| `Đang có lượt chạy khác` | `run` khi đang bận | `/quest status` |
-| Embed `0 quest` | không có quest khả dụng | bình thường, chờ quest mới |
+| `Bạn chưa đăng nhập quest` | chưa có token | `/quest login` |
+| `Đăng nhập thất bại: Discord trả 401` | token chết | lấy token mới từ trình duyệt |
+| `token này thuộc về tài khoản khác` | dán token người khác | dùng token của chính mình |
+| `đó là bot token` | nhầm loại | lấy user token |
+| `thiếu thư viện cryptography` | host chưa cài | thêm vào `requirements.txt`, redeploy |
+| `Lỗi fetch: HTTP 403` | token bị hạn chế | đăng nhập lại web, lấy token mới |
+| Embed `0 quest` | không có quest khả dụng | bình thường |
 
 > Quest `PLAY_ON_DESKTOP` / `STREAM_ON_DESKTOP` chạy đúng bằng thời lượng thật.
-> `/quest status` vẫn trả lời ngay vì nó đọc state, không lấy lock.
+> `/quest status` vẫn trả lời ngay vì đọc state, không lấy lock.
 
-### Rủi ro khi đặt token trên host
+### Rủi ro còn lại
 
-User token nằm trên botkeep nghĩa là ai đọc được env của panel thì điều khiển được
-tài khoản Discord đó, và dùng user token qua HTTP là trái ToS Discord. Muốn zero
-rủi ro thì để `QUEST_TOKEN` trống và chạy `main.py` trên máy mình — hai lệnh vẫn
-ở đó, chỉ báo chưa cấu hình.
+Token được mã hoá khi lưu, nhưng khoá nằm trên cùng máy chủ — ai chạy được tiến trình bot hoặc đọc được `quest-secret.key` thì giải mã được. Và dùng user token qua HTTP là trái ToS Discord, tài khoản có thể bị khoá. Ai không muốn đặt token lên host thì cứ chạy `main.py` trên máy mình.

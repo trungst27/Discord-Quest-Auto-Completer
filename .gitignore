@@ -6,6 +6,9 @@ logs/
 .token
 .env
 
+# Quest data: encrypted per-user tokens, the key beside them, settings
+quest-tokens.json
+quest-secret.key
 quest-settings.json
-botkeep-status.jpg
 
+botkeep-status.jpg

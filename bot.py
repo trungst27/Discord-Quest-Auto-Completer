@@ -73,7 +73,7 @@ OWNER_IDS = frozenset(
 STARTED_AT = None  # set in on_ready
 
 # Commands that must never appear in the public help listing.
-OWNER_COMMANDS = frozenset({'sync', 'scan', 'quest'})
+OWNER_COMMANDS = frozenset({'sync'})
 
 
 def is_owner(user: discord.abc.User) -> bool:
@@ -132,12 +132,15 @@ class DiscordBot(discord.Client):
             log.info('  guild: %s (ID: %s)', guild.name, guild.id)
         if not OWNER_IDS:
             log.warning('OWNER_IDS is empty — owner-only commands are disabled for everyone.')
-        if QUEST_BRIDGE.configured:
-            log.info('Quest commands enabled (QUEST_TOKEN present).')
+        if QUEST_SERVICE.configured:
+            log.info(
+                'Quest commands ready; %d user login(s) stored.',
+                QUEST_SERVICE.store.known_users() if QUEST_SERVICE.store else 0,
+            )
         else:
             log.warning(
-                'Quest commands disabled: %s. /scan and /quest will explain the fix.',
-                QUEST_BRIDGE.reason_unavailable(),
+                'Quest commands unavailable: %s. /scan and /quest will explain the fix.',
+                QUEST_SERVICE.reason_unavailable(),
             )
 
     async def on_guild_join(self, guild: discord.Guild):
@@ -155,11 +158,11 @@ class DiscordBot(discord.Client):
 
 bot = DiscordBot()
 
-# /scan and /quest live in their own module: they talk to the user-scoped quest
-# API, which is unrelated to the gateway this client runs on.
+# /scan and /quest live in their own module: each user stores their own user
+# token, which is unrelated to the gateway this client runs on.
 from bot_quests import register as register_quest_commands  # noqa: E402
 
-QUEST_BRIDGE = register_quest_commands(bot.tree, is_owner)
+QUEST_SERVICE = register_quest_commands(bot.tree, is_owner)
 
 
 @bot.tree.command(name='ping', description='Check whether the bot is online')
