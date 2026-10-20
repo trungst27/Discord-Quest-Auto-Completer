@@ -39,11 +39,36 @@ Hai loại token khác nhau, đừng trộn: bot token gọi `/users/@me` với 
 | `/help` | mọi người |
 | `/sync` | chỉ owner (`OWNER_IDS`) |
 | `/scan` | chỉ owner — quét quest một lần, chỉ đọc |
-| `/quest start` | chỉ owner — bật auto-scan nền |
-| `/quest stop` | chỉ owner — dừng auto-scan |
-| `/quest status` | chỉ owner — trạng thái worker |
+| `/quest start` | chỉ owner — bật worker nền: quét → nhận → hoàn thành |
+| `/quest stop` | chỉ owner — dừng worker |
+| `/quest status` | chỉ owner — trạng thái, số lần quét, lỗi |
+| `/quest run` | chỉ owner — chạy một chu kỳ đầy đủ ngay |
+| `/quest config` | chỉ owner — xem cấu hình |
+| `/quest set` | chỉ owner — sửa `interval`, `heartbeat`, `auto_accept`, `log_progress`, `debug` |
+| `/quest build` | chỉ owner — kiểm tra user token + build number |
 
 `/scan` và `/quest` gọi API quest, mà API đó là **user-scoped** — bot token nhận `401`. Nên chúng cần biến môi trường `QUEST_TOKEN` (user token), tách hẳn khỏi `DISCORD_TOKEN`. Thiếu biến đó bot vẫn chạy bình thường, hai lệnh chỉ in hướng dẫn cấu hình.
+
+Tính năng trong bảng dưới đây chạy được cả hai cách: `main.py` trong terminal, hoặc lệnh Discord.
+
+| Tính năng | `main.py` | Discord |
+|---|---|---|
+| Auto Scan | `run()` + `POLL_INTERVAL` | `/quest start`, `/quest set interval` |
+| Auto Accept | `AUTO_ACCEPT` | `/quest set auto_accept on\|off` |
+| Auto Complete | `process_quest()` | `/quest start`, `/quest run` |
+| Rate Limit Handling | tự chờ 429 | tự động, lỗi ở `/quest status` |
+| Build Number Fetch | `fetch_latest_build_number()` | `/quest build` |
+
+Cấu hình đặt bằng `/quest set` được ghi vào `quest-settings.json` và áp vào
+`main.py` trước mỗi chu kỳ:
+
+| Key | Mặc định | Khoảng | Nghĩa |
+|---|---|---|---|
+| `interval` | 300 | 60–3600 | giây giữa các lần quét |
+| `heartbeat` | 20 | 5–60 | giây giữa heartbeat |
+| `auto_accept` | on | on/off | tự nhận quest mới |
+| `log_progress` | off | on/off | log tiến độ |
+| `debug` | off | on/off | log HTTP |
 
 > **Rủi ro:** user token nằm trên host đồng nghĩa bất kỳ ai đọc được env của panel đều điều khiển được tài khoản Discord của bạn, và dùng user token qua HTTP là trái ToS Discord. Muốn an toàn tuyệt đối thì để `QUEST_TOKEN` trống và chạy `main.py` trên máy mình.
 

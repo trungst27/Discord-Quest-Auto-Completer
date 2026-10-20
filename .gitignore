@@ -5,3 +5,7 @@ logs/
 .bot-token.xml
 .token
 .env
+
+quest-settings.json
+botkeep-status.jpg
+

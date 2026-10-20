@@ -180,7 +180,7 @@ Không chạy `main.py` trên botkeep cùng bot — token khác nhau, nhưng pan
 
 ## 10. Dùng trong Discord — `/scan` và `/quest`
 
-Bot có thêm hai lệnh owner-only gọi cùng API đó, để khỏi phải mở terminal.
+Bot có thêm nhóm lệnh owner-only gọi đúng API mà `main.py` gọi, để khỏi mở terminal.
 
 ### Bật
 
@@ -190,86 +190,114 @@ Thêm vào env của bot (local `.env` hoặc `Environment` trên botkeep):
 QUEST_TOKEN=<user token>
 ```
 
-Restart bot. Log đúng:
+Restart. Log đúng:
 
 ```
 INFO  bot.quests: Quest client ready (client_build_number=641803).
 INFO  bot: Quest commands enabled (QUEST_TOKEN present).
 ```
 
-Thiếu biến đó log ra:
+Thiếu biến đó thì bot vẫn chạy, chỉ log:
 
 ```
 WARNING bot: Quest commands disabled: thiếu `QUEST_TOKEN`. /scan and /quest will explain the fix.
 ```
 
-Lệnh vẫn đăng ký, chỉ in hướng dẫn khi bấm.
+### Bảng lệnh
 
-### `/scan`
+| Lệnh | Việc |
+|---|---|
+| `/scan [show_completed]` | quét một lần, chỉ đọc |
+| `/quest start [notify]` | bật worker nền: quét → nhận → hoàn thành |
+| `/quest stop` | dừng worker, huỷ cả one-shot đang chạy |
+| `/quest status` | trạng thái, số lần quét, lỗi gần nhất |
+| `/quest run` | chạy một chu kỳ đầy đủ ngay (nhận + hoàn thành) |
+| `/quest config` | xem cấu hình hiện tại |
+| `/quest set key value` | sửa cấu hình, lưu vào `quest-settings.json` |
+| `/quest build` | kiểm tra token + build number |
 
-Quét một lần, **chỉ đọc** — không nhận, không gửi progress. Trả embed:
+### Tính năng README ↔ lệnh
 
-```
-Quest scan
-4 quest · 1 đã nhận · 2 hoàn thành · 4 khả dụng
-
-✓ Watch a video      WATCH_VIDEO · 300/300s
-▶ Play a game        PLAY_ON_DESKTOP · 120/900s
-○ New quest          STREAM_ON_DESKTOP · 0/300s
-```
-
-`show_completed: false` (mặc định) ẩn quest đã xong. Chỉ owner thấy — dữ liệu quest là của tài khoản bạn.
-
-Giới hạn 25 field mỗi embed; nhiều hơn thì footer ghi `+N quest không hiển thị`.
-
-### `/quest start`
-
-Bật worker nền: quét → nhận → hoàn thành, lặp lại.
-
-```
-/quest start interval:300 notify:true
-```
-
-- `interval` 60–3600 giây, mặc định 300
-- `notify: true` gửi embed `Quest hoàn thành` vào channel hiện tại mỗi khi xong quest
-- Worker chỉ có một: `start` lần hai bị từ chối cho tới khi `stop`
-
-### `/quest stop`
-
-Huỷ task, đợi nó dọn xong. Gọi lại khi đang không chạy là no-op.
-
-### `/quest status`
-
-```
-Quest worker
-Trạng thái: đang chạy
-Bật lúc: 5 phút trước
-Nhịp quét: 300s
-Lần quét: 12
-Quest đã xong: 3
-Quét gần nhất: 2 phút trước
-Lỗi gần nhất: HTTP 401: {"message": "401: Unauthorized"}
-```
-
-### Khác biệt với `main.py`
-
-| | `main.py` | `/scan`, `/quest` |
+| Tính năng trong README | `main.py` | Trong Discord |
 |---|---|---|
-| Chạy ở đâu | máy bạn | botkeep / host bot |
-| Token nằm đâu | máy bạn | env của host |
-| Dừng thế nào | Ctrl+C | `/quest stop` |
-| Rủi ro | thấp | host đọc được user token |
+| **Auto Scan** | `run()` + `POLL_INTERVAL` | `/quest start`, `/quest set interval` |
+| **Auto Accept** | `AUTO_ACCEPT` | `/quest set auto_accept on\|off` |
+| **Auto Complete** | `process_quest()` | `/quest start`, `/quest run` |
+| **Rate Limit Handling** | có sẵn, tự chờ 429 | tự động, lỗi hiện ở `/quest status` |
+| **Build Number Fetch** | `fetch_latest_build_number()` | `/quest build` |
 
-Cơ chế bên dưới giống hệt — bot gọi `QuestAutocompleter.scan_once()` trong worker thread, cùng hàm `main.py` dùng.
+### Cấu hình
+
+Năm hằng số của `main.py` chỉnh được tại chỗ. Giá trị ghi vào module global
+**trước mỗi chu kỳ**, và lưu ra `quest-settings.json` nên restart vẫn giữ.
+
+| Key | Mặc định | Khoảng | Nghĩa |
+|---|---|---|---|
+| `interval` | 300 | 60–3600 | giây giữa các lần quét |
+| `heartbeat` | 20 | 5–60 | giây giữa heartbeat |
+| `auto_accept` | on | on/off | tự nhận quest mới |
+| `log_progress` | off | on/off | log tiến độ ra console |
+| `debug` | off | on/off | log HTTP chi tiết |
+
+```
+/quest set interval 120
+/quest set heartbeat 20
+/quest set auto_accept off
+```
+
+Giá trị sai bị từ chối ngay, không ghi file:
+
+```
+Giá trị không hợp lệ cho `interval`: phải trong khoảng 60–3600
+Giá trị không hợp lệ cho `auto_accept`: cần `on` hoặc `off`
+```
+
+### `/quest run` khác `/quest start`
+
+`run` chạy **một** chu kỳ rồi dừng — tiện test thật. Nó chạy nền nên không treo
+interaction, nhưng quest `PLAY_ON_DESKTOP` 15 phút thì chờ đủ 15 phút mới có kết quả.
+`start` thì lặp mãi cho tới khi `stop`.
+
+Chỉ một lượt chạy tại một thời điểm: `start` lần hai, hoặc `run` khi worker đang
+chạy, đều bị từ chối.
+
+### `/quest build` — chẩn đoán token
+
+```
+Quest credentials
+client_build_number   641803
+GET /users/@me        200
+Token                 72 ký tự
+
+Đăng nhập: SUJILAY (stchan06 · ID 1482005776469069927)
+```
+
+Token chết:
+
+```
+GET /users/@me        401
+Lỗi: Token chết hoặc bị đăng xuất. Lấy token mới từ trình duyệt.
+```
+
+Nếu token là bot token, embed sẽ ghi rõ `Sai loại token`.
 
 ### Lỗi thường gặp
 
 | Log / embed | Nghĩa | Sửa |
 |---|---|---|
 | `Quest chưa cấu hình — thiếu QUEST_TOKEN` | env trống | thêm biến, restart |
-| `Lỗi fetch: HTTP 401` | token chết | lấy token mới |
+| `Lỗi fetch: HTTP 401` | token chết | `/quest build` xác nhận, lấy token mới |
 | `Quest fetch lỗi (403)` | token bị hạn chế | đăng nhập lại trên web, lấy token mới |
 | `Worker đang chạy` | start hai lần | `/quest stop` trước |
-| Embed trống, `0 quest` | tài khoản không có quest khả dụng | bình thường, chờ quest mới |
+| `Đang có lượt chạy khác` | `run` khi đang bận | `/quest status` |
+| Embed `0 quest` | không có quest khả dụng | bình thường, chờ quest mới |
 
-> Quest `PLAY_ON_DESKTOP` / `STREAM_ON_DESKTOP` chạy đúng bằng thời lượng thật (15 phút = 15 phút). Trong lúc đó `/scan` sẽ chờ vì cùng một lock — `/quest status` thì vẫn trả lời ngay.
+> Quest `PLAY_ON_DESKTOP` / `STREAM_ON_DESKTOP` chạy đúng bằng thời lượng thật.
+> `/quest status` vẫn trả lời ngay vì nó đọc state, không lấy lock.
+
+### Rủi ro khi đặt token trên host
+
+User token nằm trên botkeep nghĩa là ai đọc được env của panel thì điều khiển được
+tài khoản Discord đó, và dùng user token qua HTTP là trái ToS Discord. Muốn zero
+rủi ro thì để `QUEST_TOKEN` trống và chạy `main.py` trên máy mình — hai lệnh vẫn
+ở đó, chỉ báo chưa cấu hình.
