@@ -28,6 +28,7 @@ import discord
 from discord import app_commands
 
 import quest_store
+from quest_notifications import ProgressDM
 
 log = logging.getLogger('bot.quests')
 
@@ -120,6 +121,8 @@ class UserSession:
         self.last_at = None
         self.last_error: Optional[str] = None
         self.last_summary: Optional[dict] = None
+        self.notify_user = None
+        self.dm_reporter = None
 
     @property
     def running(self) -> bool:
@@ -250,7 +253,19 @@ class QuestService:
 
     # ── work ───────────────────────────────────────────────────────────────────
     async def scan(self, session: UserSession, dry_run: bool) -> dict:
+        if session.notify_user is not None and not dry_run:
+            if session.dm_reporter is None:
+                session.dm_reporter = ProgressDM(session.notify_user)
+            return await session.dm_reporter.run(
+                lambda reporter: self._scan(session, dry_run, reporter)
+            )
+        return await self._scan(session, dry_run)
+
+    async def _scan(self, session: UserSession, dry_run: bool, reporter=None) -> dict:
         async with self.api_lock:
+            if reporter is not None:
+                reporter.stage = 'Đang xử lý chu kỳ'
+                await reporter.update('Quest • Đã bắt đầu xử lý chu kỳ…')
             apply_settings(session.settings)
             await asyncio.to_thread(session.build)
             summary = await asyncio.to_thread(session.completer.scan_once, dry_run)
@@ -282,7 +297,12 @@ class QuestService:
             session = self.session(user_id)
             if session is None or session.running:
                 continue
-            channel = client.get_channel(channel_id) if channel_id else None
+            channel = None
+            if channel_id:
+                try:
+                    session.notify_user = client.get_user(user_id) or await client.fetch_user(user_id)
+                except discord.HTTPException:
+                    log.warning('Cannot restore DM recipient for user %s.', user_id)
             owner = client.get_user(user_id) or f'<@{user_id}>'
             session.started_at = discord.utils.utcnow()
             session._worker = asyncio.create_task(
@@ -563,18 +583,28 @@ def register(tree: app_commands.CommandTree, owner_check) -> QuestService:
         )
 
     @quest.command(name='start', description='Bật auto-scan nền cho tài khoản của bạn')
-    @app_commands.describe(notify='Gửi thông báo vào channel này khi quest xong')
+    @app_commands.describe(notify='Gửi tiến độ qua DM riêng của bạn')
     async def quest_start(interaction: discord.Interaction, notify: bool = True):
         session = await get_session(interaction)
         if session is None:
             return
-        if session.running:
+        if session.running or session.busy:
             await interaction.response.send_message(
                 f'Worker đang chạy (nhịp {session.interval}s). Dừng trước bằng `/quest stop`.',
                 ephemeral=True,
             )
             return
-        channel = interaction.channel if notify else None
+        await interaction.response.defer(ephemeral=True)
+        session.notify_user = interaction.user if notify else None
+        session.dm_reporter = None
+        channel = None
+        dm_notice = ''
+        if notify:
+            try:
+                await interaction.user.send('Quest • Đã bật thông báo riêng. Mỗi chu kỳ sẽ có một tin nhắn cập nhật.')
+            except discord.HTTPException:
+                session.notify_user = None
+                dm_notice = '\nKhông gửi được DM. Bật nhận tin nhắn từ bot rồi chạy lại để nhận thông báo.'
         session.started_at = discord.utils.utcnow()
         session._worker = asyncio.create_task(
             _worker_loop(service, session, channel, interaction.user),
@@ -583,13 +613,13 @@ def register(tree: app_commands.CommandTree, owner_check) -> QuestService:
         service.store.set_auto(
             session.user_id,
             True,
-            getattr(interaction.channel, 'id', None),
+            session.user_id if session.notify_user is not None else 0,
         )
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f'Đã bật auto-scan: quét mỗi **{session.interval}s**, '
             f"auto-accept **{'on' if session.settings['auto_accept'] else 'off'}**, "
             f"thông báo **{'on' if notify else 'off'}**.\n"
-            'Worker tự bật lại sau khi bot restart.',
+            'Worker tự bật lại sau khi bot restart.' + dm_notice,
             ephemeral=True,
         )
 
@@ -636,6 +666,16 @@ def register(tree: app_commands.CommandTree, owner_check) -> QuestService:
             return
         await interaction.response.defer(ephemeral=True)
         holder = await interaction.followup.send('Đang chạy một chu kỳ…', ephemeral=True)
+        session.notify_user = interaction.user
+        session.dm_reporter = None
+        try:
+            await interaction.user.send('Quest • Đã nhận yêu cầu chạy một chu kỳ. Tiến độ sẽ gửi riêng tại đây.')
+        except discord.HTTPException:
+            session.notify_user = None
+            await interaction.followup.send(
+                'Không gửi được DM; bật nhận tin nhắn từ bot. Kết quả vẫn hiển thị ở đây.',
+                ephemeral=True,
+            )
 
         async def report(summary):
             try:

@@ -289,3 +289,14 @@ Token chết → ô đỏ, `401`, kèm nhắc `/quest login` lại.
 ### Rủi ro còn lại
 
 Token được mã hoá khi lưu, nhưng khoá nằm trên cùng máy chủ — ai chạy được tiến trình bot hoặc đọc được `quest-secret.key` thì giải mã được. Và dùng user token qua HTTP là trái ToS Discord, tài khoản có thể bị khoá. Ai không muốn đặt token lên host thì cứ chạy `main.py` trên máy mình.
+# Thông báo tiến độ riêng
+
+`/quest start notify:true` và `/quest run` gửi trạng thái qua DM cho người chạy.
+Một tin nhắn trạng thái được chỉnh sửa tối đa mỗi 30 giây khi chờ hoặc xử lý,
+rồi cập nhật kết quả hoặc lỗi cuối chu kỳ. Worker nền tái sử dụng tin nhắn qua
+các chu kỳ; sau restart bot mở tin nhắn mới. `notify:false` được giữ khi restart.
+
+Hiện cập nhật trạng thái và thời gian chạy, chưa có phần trăm tiến độ từng Quest.
+Nếu DM bị chặn, lệnh thông báo riêng cho người dùng và tác vụ vẫn tiếp tục.
+Thông báo lỗi không chứa token hoặc nội dung exception. `/quest stop` yêu cầu
+dừng worker; luồng HTTP đồng bộ đang chạy có thể chưa dừng ngay.
