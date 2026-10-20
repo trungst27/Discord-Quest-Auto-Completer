@@ -1,2 +1,4 @@
+# Bot-only dependency set. Hosting panels that read requirements.txt get the
+# same packages from there — keep the versions in sync.
 discord.py>=2.7,<3
 python-dotenv>=1.0,<2
