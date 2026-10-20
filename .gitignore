@@ -1,0 +1,7 @@
+.venv/
+.tmp/
+__pycache__/
+logs/
+.bot-token.xml
+.token
+.env
