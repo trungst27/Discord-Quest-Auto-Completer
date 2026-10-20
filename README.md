@@ -44,6 +44,14 @@ Hai loại token khác nhau, đừng trộn: bot token gọi `/users/@me` với 
 > git config core.hooksPath .githooks
 > ```
 
+### Kiểm tra token trước khi deploy
+
+```powershell
+.\.venv\Scripts\python.exe tools\check_token.py <TOKEN>
+```
+
+Ra `TOKEN VALID` + danh sách lệnh = token đúng. Ra `401 Unauthorized` = token đã chết, phải reset.
+
 ### Chạy quest tool
 
 ```powershell
