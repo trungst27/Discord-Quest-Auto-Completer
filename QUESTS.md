@@ -175,3 +175,101 @@ Không chạy `main.py` trên botkeep cùng bot — token khác nhau, nhưng pan
 4. mở Discord kiểm tra    -> quest đã hoàn thành
 5. main.py --interval 300 -> chạy dài, để đó
 ```
+
+---
+
+## 10. Dùng trong Discord — `/scan` và `/quest`
+
+Bot có thêm hai lệnh owner-only gọi cùng API đó, để khỏi phải mở terminal.
+
+### Bật
+
+Thêm vào env của bot (local `.env` hoặc `Environment` trên botkeep):
+
+```
+QUEST_TOKEN=<user token>
+```
+
+Restart bot. Log đúng:
+
+```
+INFO  bot.quests: Quest client ready (client_build_number=641803).
+INFO  bot: Quest commands enabled (QUEST_TOKEN present).
+```
+
+Thiếu biến đó log ra:
+
+```
+WARNING bot: Quest commands disabled: thiếu `QUEST_TOKEN`. /scan and /quest will explain the fix.
+```
+
+Lệnh vẫn đăng ký, chỉ in hướng dẫn khi bấm.
+
+### `/scan`
+
+Quét một lần, **chỉ đọc** — không nhận, không gửi progress. Trả embed:
+
+```
+Quest scan
+4 quest · 1 đã nhận · 2 hoàn thành · 4 khả dụng
+
+✓ Watch a video      WATCH_VIDEO · 300/300s
+▶ Play a game        PLAY_ON_DESKTOP · 120/900s
+○ New quest          STREAM_ON_DESKTOP · 0/300s
+```
+
+`show_completed: false` (mặc định) ẩn quest đã xong. Chỉ owner thấy — dữ liệu quest là của tài khoản bạn.
+
+Giới hạn 25 field mỗi embed; nhiều hơn thì footer ghi `+N quest không hiển thị`.
+
+### `/quest start`
+
+Bật worker nền: quét → nhận → hoàn thành, lặp lại.
+
+```
+/quest start interval:300 notify:true
+```
+
+- `interval` 60–3600 giây, mặc định 300
+- `notify: true` gửi embed `Quest hoàn thành` vào channel hiện tại mỗi khi xong quest
+- Worker chỉ có một: `start` lần hai bị từ chối cho tới khi `stop`
+
+### `/quest stop`
+
+Huỷ task, đợi nó dọn xong. Gọi lại khi đang không chạy là no-op.
+
+### `/quest status`
+
+```
+Quest worker
+Trạng thái: đang chạy
+Bật lúc: 5 phút trước
+Nhịp quét: 300s
+Lần quét: 12
+Quest đã xong: 3
+Quét gần nhất: 2 phút trước
+Lỗi gần nhất: HTTP 401: {"message": "401: Unauthorized"}
+```
+
+### Khác biệt với `main.py`
+
+| | `main.py` | `/scan`, `/quest` |
+|---|---|---|
+| Chạy ở đâu | máy bạn | botkeep / host bot |
+| Token nằm đâu | máy bạn | env của host |
+| Dừng thế nào | Ctrl+C | `/quest stop` |
+| Rủi ro | thấp | host đọc được user token |
+
+Cơ chế bên dưới giống hệt — bot gọi `QuestAutocompleter.scan_once()` trong worker thread, cùng hàm `main.py` dùng.
+
+### Lỗi thường gặp
+
+| Log / embed | Nghĩa | Sửa |
+|---|---|---|
+| `Quest chưa cấu hình — thiếu QUEST_TOKEN` | env trống | thêm biến, restart |
+| `Lỗi fetch: HTTP 401` | token chết | lấy token mới |
+| `Quest fetch lỗi (403)` | token bị hạn chế | đăng nhập lại trên web, lấy token mới |
+| `Worker đang chạy` | start hai lần | `/quest stop` trước |
+| Embed trống, `0 quest` | tài khoản không có quest khả dụng | bình thường, chờ quest mới |
+
+> Quest `PLAY_ON_DESKTOP` / `STREAM_ON_DESKTOP` chạy đúng bằng thời lượng thật (15 phút = 15 phút). Trong lúc đó `/scan` sẽ chờ vì cùng một lock — `/quest status` thì vẫn trả lời ngay.

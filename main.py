@@ -302,9 +302,12 @@ class QuestAutocompleter:
     def __init__(self, api: DiscordAPI):
         self.api = api
         self.completed_ids: set = set()
+        # Last fetch failure, so a caller can tell 'no quests' from 'auth broke'.
+        self.last_fetch_error: Optional[str] = None
 
     # ── Fetch quests ───────────────────────────────────────────────────────────
     def fetch_quests(self) -> list:
+        self.last_fetch_error = None
         try:
             r = self.api.get("/quests/@me")
 
@@ -330,12 +333,16 @@ class QuestAutocompleter:
                 return self.fetch_quests()
             else:
                 log(f"Quest fetch lỗi ({r.status_code}): {r.text[:200]}", "warn")
+                self.last_fetch_error = (
+                    f"HTTP {r.status_code}: {r.text[:160]}"
+                )
                 return []
 
         except Exception as e:
             log(f"Error fetching quests: {e}", "error")
             if DEBUG:
                 traceback.print_exc()
+            self.last_fetch_error = f"{type(e).__name__}: {e}"
             return []
 
     # ── Auto-accept ────────────────────────────────────────────────────────────
@@ -586,6 +593,123 @@ class QuestAutocompleter:
 
         self.completed_ids.add(qid)
 
+    # ── One scan cycle ─────────────────────────────────────────────────────────
+    def scan_once(self, dry_run: bool = False) -> dict:
+        """Scan, report, and (unless dry_run) accept + complete.
+
+        Returns a plain-data summary so a caller with no knowledge of the quest
+        schema — the Discord bot — can render it without importing helpers.
+        Blocking: run it in a worker thread when called from async code.
+        """
+        quests = self.fetch_quests()
+        summary = {
+            "total": len(quests),
+            "enrolled": 0,
+            "completed": 0,
+            "completable": 0,
+            "items": [],
+            "pending_accept": [],
+            "pending_complete": [],
+            "completed_now": [],
+            "dry_run": dry_run,
+            "error": self.last_fetch_error,
+        }
+
+        if not quests:
+            log("Không có quest nào", "info")
+            return summary
+
+        summary["enrolled"] = sum(1 for q in quests if is_enrolled(q))
+        summary["completed"] = sum(1 for q in quests if is_completed(q))
+        summary["completable"] = sum(1 for q in quests if is_completable(q))
+
+        log(
+            f"Tổng: {summary['total']} quest | Enrolled: {summary['enrolled']} | "
+            f"Completed: {summary['completed']} | Completable: {summary['completable']}",
+            "info"
+        )
+
+        for q in quests:
+            name = get_quest_name(q)
+            task = get_task_type(q) or "?"
+            if is_completed(q):
+                status = "completed"
+                marker = f"{Colors.GREEN}✓{Colors.RESET}"
+            elif is_enrolled(q):
+                status = "enrolled"
+                marker = f"{Colors.YELLOW}▶{Colors.RESET}"
+            else:
+                status = "new"
+                marker = f"{Colors.DIM}○{Colors.RESET}"
+            log(f"  {marker} {name} [{task}]", "info")
+            summary["items"].append({
+                "id": q.get("id"),
+                "name": name,
+                "task": task,
+                "status": status,
+                "done": int(get_seconds_done(q)),
+                "need": int(get_seconds_needed(q)),
+                "completable": is_completable(q),
+            })
+
+        pending_accept = [
+            q for q in quests
+            if not is_enrolled(q) and not is_completed(q) and is_completable(q)
+        ]
+        pending_complete = [
+            q for q in quests
+            if is_enrolled(q) and not is_completed(q) and is_completable(q)
+            and q.get("id") not in self.completed_ids
+        ]
+
+        summary["pending_accept"] = [
+            {"name": get_quest_name(q), "task": get_task_type(q)} for q in pending_accept
+        ]
+        summary["pending_complete"] = [
+            {
+                "name": get_quest_name(q),
+                "task": get_task_type(q),
+                "done": int(get_seconds_done(q)),
+                "need": int(get_seconds_needed(q)),
+            }
+            for q in pending_complete
+        ]
+
+        if dry_run:
+            if pending_accept:
+                log(f"\nDRY RUN: sẽ nhận {len(pending_accept)} quest:", "warn")
+                for q in pending_accept:
+                    log(f"  + {get_quest_name(q)} [{get_task_type(q)}]", "progress")
+            if pending_complete:
+                log(f"\nDRY RUN: sẽ hoàn thành {len(pending_complete)} quest:", "warn")
+                for q in pending_complete:
+                    log(
+                        f"  ~ {get_quest_name(q)} "
+                        f"({get_seconds_done(q):.0f}/{get_seconds_needed(q)}s)",
+                        "progress",
+                    )
+            if not pending_accept and not pending_complete:
+                log("DRY RUN: không có gì để làm", "info")
+            return summary
+
+        # Auto-accept, then complete whatever is enrolled and unfinished.
+        quests = self.auto_accept(quests)
+        actionable = [
+            q for q in quests
+            if is_enrolled(q) and not is_completed(q) and is_completable(q)
+            and q.get("id") not in self.completed_ids
+        ]
+
+        if actionable:
+            log(f"\n{len(actionable)} quest(s) cần hoàn thành:", "info")
+            for q in actionable:
+                self.process_quest(q)
+                summary["completed_now"].append(get_quest_name(q))
+        else:
+            log("Không có quest nào cần hoàn thành lúc này", "info")
+
+        return summary
+
     # ── Main loop ──────────────────────────────────────────────────────────────
     def run(self, once: bool = False, dry_run: bool = False):
         log("=" * 60, "info")
@@ -601,73 +725,7 @@ class QuestAutocompleter:
         while True:
             cycle += 1
             log(f"── Quét lần #{cycle} ──", "info")
-
-            quests = self.fetch_quests()
-            total = len(quests)
-
-            if not quests:
-                log("Không có quest nào", "info")
-            else:
-                enrolled_count = sum(1 for q in quests if is_enrolled(q))
-                completed_count = sum(1 for q in quests if is_completed(q))
-                completable_count = sum(1 for q in quests if is_completable(q))
-
-                log(
-                    f"Tổng: {total} quest | Enrolled: {enrolled_count} | "
-                    f"Completed: {completed_count} | Completable: {completable_count}",
-                    "info"
-                )
-
-                for q in quests:
-                    name = get_quest_name(q)
-                    task = get_task_type(q) or "?"
-                    if is_completed(q):
-                        status = f"{Colors.GREEN}✓{Colors.RESET}"
-                    elif is_enrolled(q):
-                        status = f"{Colors.YELLOW}▶{Colors.RESET}"
-                    else:
-                        status = f"{Colors.DIM}○{Colors.RESET}"
-                    log(f"  {status} {name} [{task}]", "info")
-
-                if dry_run:
-                    pending_accept = [
-                        q for q in quests
-                        if not is_enrolled(q) and not is_completed(q) and is_completable(q)
-                    ]
-                    pending_complete = [
-                        q for q in quests
-                        if is_enrolled(q) and not is_completed(q) and is_completable(q)
-                        and q.get("id") not in self.completed_ids
-                    ]
-                    if pending_accept:
-                        log(f"\nDRY RUN: sẽ nhận {len(pending_accept)} quest:", "warn")
-                        for q in pending_accept:
-                            log(f"  + {get_quest_name(q)} [{get_task_type(q)}]", "progress")
-                    if pending_complete:
-                        log(f"\nDRY RUN: sẽ hoàn thành {len(pending_complete)} quest:", "warn")
-                        for q in pending_complete:
-                            done = get_seconds_done(q)
-                            need = get_seconds_needed(q)
-                            log(f"  ~ {get_quest_name(q)} ({done:.0f}/{need}s)", "progress")
-                    if not pending_accept and not pending_complete:
-                        log("DRY RUN: không có gì để làm", "info")
-                else:
-                    # Auto-accept
-                    quests = self.auto_accept(quests)
-
-                    # Filter actionable
-                    actionable = [
-                        q for q in quests
-                        if is_enrolled(q) and not is_completed(q) and is_completable(q)
-                        and q.get("id") not in self.completed_ids
-                    ]
-
-                    if actionable:
-                        log(f"\n{len(actionable)} quest(s) cần hoàn thành:", "info")
-                        for q in actionable:
-                            self.process_quest(q)
-                    else:
-                        log("Không có quest nào cần hoàn thành lúc này", "info")
+            self.scan_once(dry_run=dry_run)
 
             if once:
                 break

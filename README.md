@@ -38,6 +38,14 @@ Hai loại token khác nhau, đừng trộn: bot token gọi `/users/@me` với 
 | `/stats` | mọi người |
 | `/help` | mọi người |
 | `/sync` | chỉ owner (`OWNER_IDS`) |
+| `/scan` | chỉ owner — quét quest một lần, chỉ đọc |
+| `/quest start` | chỉ owner — bật auto-scan nền |
+| `/quest stop` | chỉ owner — dừng auto-scan |
+| `/quest status` | chỉ owner — trạng thái worker |
+
+`/scan` và `/quest` gọi API quest, mà API đó là **user-scoped** — bot token nhận `401`. Nên chúng cần biến môi trường `QUEST_TOKEN` (user token), tách hẳn khỏi `DISCORD_TOKEN`. Thiếu biến đó bot vẫn chạy bình thường, hai lệnh chỉ in hướng dẫn cấu hình.
+
+> **Rủi ro:** user token nằm trên host đồng nghĩa bất kỳ ai đọc được env của panel đều điều khiển được tài khoản Discord của bạn, và dùng user token qua HTTP là trái ToS Discord. Muốn an toàn tuyệt đối thì để `QUEST_TOKEN` trống và chạy `main.py` trên máy mình.
 
 > **Token không nằm trong repo.** Bot đọc `DISCORD_TOKEN` từ biến môi trường. Bật chặn commit lộ secret:
 > ```powershell
