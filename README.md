@@ -27,6 +27,22 @@ Hai loại token khác nhau, đừng trộn: bot token gọi `/users/@me` với 
 |---|---|
 | [BOT-SETUP.md](BOT-SETUP.md) | chạy bot trên Windows, tự bật lại sau restart |
 | [DEPLOY-BOTKEEP.md](DEPLOY-BOTKEEP.md) | deploy lên botkeep.cloud, sửa lỗi slash command |
+| [SECURITY.md](SECURITY.md) | repo public mà token không lộ, phân quyền owner |
+
+### Lệnh của bot
+
+| Lệnh | Ai dùng được |
+|---|---|
+| `/ping` | mọi người |
+| `/info` | mọi người |
+| `/stats` | mọi người |
+| `/help` | mọi người |
+| `/sync` | chỉ owner (`OWNER_IDS`) |
+
+> **Token không nằm trong repo.** Bot đọc `DISCORD_TOKEN` từ biến môi trường. Bật chặn commit lộ secret:
+> ```powershell
+> git config core.hooksPath .githooks
+> ```
 
 ### Chạy quest tool
 

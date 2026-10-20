@@ -1,0 +1,5 @@
+#!/bin/sh
+# Runs tools/secret_scan.py against staged files before every commit.
+# Enable once with: git config core.hooksPath .githooks
+
+exec python tools/secret_scan.py

@@ -63,6 +63,22 @@ GUILD_ID_RAW = (
     os.environ.get('GUILD_ID') or os.environ.get('DISCORD_GUILD_ID') or ''
 ).strip()
 
+# Comma-separated Discord user IDs that may run owner-only commands.
+# Empty means "nobody" — a missing config must never hand out admin rights.
+OWNER_IDS = frozenset(
+    int(part) for part in os.environ.get('OWNER_IDS', '').replace(' ', '').split(',')
+    if part.isdigit()
+)
+
+STARTED_AT = None  # set in on_ready
+
+# Commands that must never appear in the public help listing.
+OWNER_COMMANDS = frozenset({'sync'})
+
+
+def is_owner(user: discord.abc.User) -> bool:
+    return user.id in OWNER_IDS
+
 
 class DiscordBot(discord.Client):
     def __init__(self):
@@ -90,9 +106,14 @@ class DiscordBot(discord.Client):
             log.error('Slash command sync failed: %s', exc)
 
     async def on_ready(self):
+        global STARTED_AT
+        if STARTED_AT is None:
+            STARTED_AT = discord.utils.utcnow()
         log.info('READY: %s (ID: %s) — %d guild(s)', self.user, self.user.id, len(self.guilds))
         for guild in self.guilds:
             log.info('  guild: %s (ID: %s)', guild.name, guild.id)
+        if not OWNER_IDS:
+            log.warning('OWNER_IDS is empty — owner-only commands are disabled for everyone.')
 
     async def on_guild_join(self, guild: discord.Guild):
         log.info('Joined guild: %s (ID: %s)', guild.name, guild.id)
@@ -134,11 +155,50 @@ async def info(interaction: discord.Interaction):
 
 @bot.tree.command(name='help', description='List available commands')
 async def help_command(interaction: discord.Interaction):
-    commands = sorted(cmd.name for cmd in bot.tree.get_commands())
-    listing = '\n'.join(f'`/{name}`' for name in commands)
+    public = sorted(cmd.name for cmd in bot.tree.get_commands() if cmd.name not in OWNER_COMMANDS)
+    lines = ['**Commands**', *[f'`/{name}`' for name in public]]
+    if is_owner(interaction.user):
+        lines.append('\n**Owner only**')
+        lines.extend(f'`/{name}`' for name in sorted(OWNER_COMMANDS))
+    await interaction.response.send_message('\n'.join(lines), ephemeral=True)
+
+
+@bot.tree.command(name='stats', description='Show uptime and server count')
+async def stats(interaction: discord.Interaction):
+    if STARTED_AT is None:
+        uptime = 'starting'
+    else:
+        delta = discord.utils.utcnow() - STARTED_AT
+        hours, rem = divmod(int(delta.total_seconds()), 3600)
+        minutes, seconds = divmod(rem, 60)
+        uptime = f'{hours}h {minutes}m {seconds}s'
     await interaction.response.send_message(
-        f'**Commands ({len(commands)})**\n{listing}', ephemeral=True
+        f'**Uptime:** {uptime}\n'
+        f'**Servers:** {len(bot.guilds)}\n'
+        f'**Latency:** {round(bot.latency * 1000)} ms',
+        ephemeral=True,
     )
+
+
+@bot.tree.command(name='sync', description='Re-sync slash commands (owner only)')
+async def sync(interaction: discord.Interaction):
+    if not is_owner(interaction.user):
+        await interaction.response.send_message('Owner only.', ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    try:
+        if interaction.guild:
+            bot.tree.copy_global_to(guild=interaction.guild)
+            synced = await bot.tree.sync(guild=interaction.guild)
+            scope = f'guild `{interaction.guild.id}`'
+        else:
+            synced = await bot.tree.sync()
+            scope = 'global'
+        log.info('Manual sync by %s: %d command(s) to %s.', interaction.user, len(synced), scope)
+        await interaction.followup.send(f'Synced {len(synced)} command(s) to {scope}.', ephemeral=True)
+    except discord.HTTPException as exc:
+        log.error('Manual sync failed: %s', exc)
+        await interaction.followup.send(f'Sync failed: `{exc}`', ephemeral=True)
 
 
 def main() -> int:
