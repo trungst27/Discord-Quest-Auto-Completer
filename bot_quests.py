@@ -367,6 +367,8 @@ def scan_embed(summary: dict, show_completed: bool = True) -> discord.Embed:
         footer.append('dry run — không nhận, không hoàn thành')
     if summary.get('completed_now'):
         footer.append(f"{len(summary['completed_now'])} vừa hoàn thành")
+    for miss in (summary.get('not_completed') or [])[:3]:
+        footer.append(f"⚠ {miss['name']} chưa xong ({miss.get('task') or '?'})")
     if footer:
         embed.set_footer(text=' · '.join(footer))
     return embed

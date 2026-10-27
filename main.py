@@ -57,6 +57,31 @@ SUPPORTED_TASKS = [
     "WATCH_VIDEO_ON_MOBILE",
 ]
 
+# Discord adds task names without notice. The family decides which heartbeat
+# loop can drive an unknown name; unknown families are reported, never faked.
+TASK_FAMILIES = {
+    "WATCH_VIDEO": "video",
+    "WATCH_VIDEO_ON_MOBILE": "video",
+    "PLAY_ON_DESKTOP": "heartbeat",
+    "STREAM_ON_DESKTOP": "heartbeat",
+    "PLAY_ACTIVITY": "activity",
+}
+
+
+def task_family(task_type: Optional[str]) -> Optional[str]:
+    if not task_type:
+        return None
+    if task_type in TASK_FAMILIES:
+        return TASK_FAMILIES[task_type]
+    name = task_type.upper()
+    if "VIDEO" in name:
+        return "video"
+    if "ACTIVITY" in name:
+        return "activity"
+    if "DESKTOP" in name or "STREAM" in name or "HEARTBEAT" in name or name.startswith("PLAY_"):
+        return "heartbeat"
+    return None
+
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 class Colors:
@@ -272,8 +297,9 @@ def is_completable(quest: dict) -> bool:
     if not tc or "tasks" not in tc:
         return False
 
-    tasks = tc["tasks"]
-    return any(tasks.get(t) is not None for t in SUPPORTED_TASKS)
+    # Shape-based, not name-based: Discord rotates task names and a hard
+    # whitelist silently hides brand-new quests from the run loop.
+    return get_task_type(quest) is not None
 
 
 def is_enrolled(quest: dict) -> bool:
@@ -288,11 +314,21 @@ def is_completed(quest: dict) -> bool:
 
 def get_task_type(quest: dict) -> Optional[str]:
     tc = get_task_config(quest)
-    if not tc or "tasks" not in tc:
+    if not tc:
         return None
-    for t in SUPPORTED_TASKS:
-        if tc["tasks"].get(t) is not None:
-            return t
+    tasks = tc.get("tasks")
+    if not isinstance(tasks, dict):
+        return None
+    for known in SUPPORTED_TASKS:
+        if tasks.get(known) is not None:
+            return known
+    # New task name: accept the first entry that carries the usual shape so the
+    # quest is attempted instead of being silently dropped as "unsupported".
+    for key, value in tasks.items():
+        if isinstance(value, dict) and (
+            "secondsNeeded" in value or "seconds_needed" in value
+        ):
+            return key
     return None
 
 
@@ -301,7 +337,14 @@ def get_seconds_needed(quest: dict) -> int:
     task_type = get_task_type(quest)
     if not tc or not task_type:
         return 0
-    return tc["tasks"][task_type].get("target", 0)
+    entry = tc["tasks"].get(task_type) or {}
+    if not isinstance(entry, dict):
+        return 0
+    for key in ("target", "secondsNeeded", "seconds_needed", "requiredSeconds", "required_seconds"):
+        value = entry.get(key)
+        if isinstance(value, (int, float)) and value > 0:
+            return int(value)
+    return 0
 
 
 def get_seconds_done(quest: dict) -> float:
@@ -427,12 +470,16 @@ class QuestAutocompleter:
         return self.fetch_quests()
 
     # ── Complete: WATCH_VIDEO ──────────────────────────────────────────────────
-    def complete_video(self, quest: dict):
+    def complete_video(self, quest: dict) -> bool:
         name = get_quest_name(quest)
         qid = quest["id"]
         seconds_needed = get_seconds_needed(quest)
         seconds_done = get_seconds_done(quest)
         enrolled_at_str = get_enrolled_at(quest)
+
+        if seconds_needed <= 0:
+            log(f'"{name}" – không đọc được thời lượng cần, bỏ qua (không báo hoàn thành)', "warn")
+            return False
 
         if enrolled_at_str:
             enrolled_ts = datetime.fromisoformat(enrolled_at_str.replace("Z", "+00:00")).timestamp()
@@ -459,7 +506,7 @@ class QuestAutocompleter:
                         body = r.json()
                         if body.get("completed_at"):
                             log(f"✅ Hoàn thành: {Colors.BOLD}{name}{Colors.RESET}", "ok")
-                            return
+                            return True
                         seconds_done = min(seconds_needed, timestamp)
                         log(f"  [{name}] {seconds_done:.0f}/{seconds_needed}s", "progress")
                     elif r.status_code == 429:
@@ -481,14 +528,19 @@ class QuestAutocompleter:
         except Exception:
             pass
         log(f"✅ Hoàn thành: {Colors.BOLD}{name}{Colors.RESET}", "ok")
+        return True
 
     # ── Complete: PLAY_ON_DESKTOP / STREAM_ON_DESKTOP ──────────────────────────
-    def complete_heartbeat(self, quest: dict):
+    def complete_heartbeat(self, quest: dict) -> bool:
         name = get_quest_name(quest)
         qid = quest["id"]
         task_type = get_task_type(quest)
         seconds_needed = get_seconds_needed(quest)
         seconds_done = get_seconds_done(quest)
+
+        if seconds_needed <= 0:
+            log(f'"{name}" – không đọc được thời lượng cần, bỏ qua (không báo hoàn thành)', "warn")
+            return False
 
         remaining = max(0, seconds_needed - seconds_done)
         log(
@@ -515,7 +567,7 @@ class QuestAutocompleter:
 
                     if body.get("completed_at") or seconds_done >= seconds_needed:
                         log(f"✅ Hoàn thành: {Colors.BOLD}{name}{Colors.RESET}", "ok")
-                        return
+                        return True
 
                 elif r.status_code == 429:
                     retry_after = r.json().get("retry_after", 10)
@@ -538,13 +590,18 @@ class QuestAutocompleter:
         except Exception:
             pass
         log(f"✅ Hoàn thành: {Colors.BOLD}{name}{Colors.RESET}", "ok")
+        return True
 
     # ── Complete: PLAY_ACTIVITY ────────────────────────────────────────────────
-    def complete_activity(self, quest: dict):
+    def complete_activity(self, quest: dict) -> bool:
         name = get_quest_name(quest)
         qid = quest["id"]
         seconds_needed = get_seconds_needed(quest)
         seconds_done = get_seconds_done(quest)
+
+        if seconds_needed <= 0:
+            log(f'"{name}" – không đọc được thời lượng cần, bỏ qua (không báo hoàn thành)', "warn")
+            return False
 
         remaining = max(0, seconds_needed - seconds_done)
         log(
@@ -591,30 +648,46 @@ class QuestAutocompleter:
         except Exception:
             pass
         log(f"✅ Hoàn thành: {Colors.BOLD}{name}{Colors.RESET}", "ok")
+        return True
 
     # ── Process a single quest ─────────────────────────────────────────────────
-    def process_quest(self, quest: dict):
+    def process_quest(self, quest: dict) -> bool:
+        """Attempt one quest. Returns True only when it really finished.
+
+        The caller reports completion from this value, so an unsupported or
+        failed attempt can never be shown to the user as "đã hoàn thành".
+        """
         qid = quest.get("id")
         name = get_quest_name(quest)
         task_type = get_task_type(quest)
 
         if not task_type:
-            log(f"\"{name}\" – task không hỗ trợ, bỏ qua", "warn")
-            return
+            log(f'"{name}" – không đọc được loại task, bỏ qua', "warn")
+            return False
+
+        family = task_family(task_type)
+        if family is None:
+            log(f'"{name}" – task {task_type} chưa hỗ trợ, bỏ qua', "warn")
+            return False
 
         if qid in self.completed_ids:
-            return
+            return False
 
         log(f"━━━ Bắt đầu: {Colors.BOLD}{name}{Colors.RESET} (task: {task_type}) ━━━", "info")
 
-        if task_type in ("WATCH_VIDEO", "WATCH_VIDEO_ON_MOBILE"):
-            self.complete_video(quest)
-        elif task_type in ("PLAY_ON_DESKTOP", "STREAM_ON_DESKTOP"):
-            self.complete_heartbeat(quest)
-        elif task_type == "PLAY_ACTIVITY":
-            self.complete_activity(quest)
+        if family == "video":
+            ok = self.complete_video(quest)
+        elif family == "heartbeat":
+            ok = self.complete_heartbeat(quest)
+        else:
+            ok = self.complete_activity(quest)
+
+        if not ok:
+            log(f'"{name}" chưa xong – thử lại ở chu kỳ sau', "warn")
+            return False
 
         self.completed_ids.add(qid)
+        return True
 
     # ── One scan cycle ─────────────────────────────────────────────────────────
     def scan_once(self, dry_run: bool = False) -> dict:
@@ -632,6 +705,7 @@ class QuestAutocompleter:
                 "pending_accept": [],
                 "pending_complete": [],
                 "completed_now": [],
+                "not_completed": [],
                 "dry_run": dry_run,
                 "error": "shutdown",
             }
@@ -653,6 +727,7 @@ class QuestAutocompleter:
             "pending_accept": [],
             "pending_complete": [],
             "completed_now": [],
+            "not_completed": [],
             "dry_run": dry_run,
             "error": self.last_fetch_error,
         }
@@ -745,8 +820,13 @@ class QuestAutocompleter:
         if actionable:
             log(f"\n{len(actionable)} quest(s) cần hoàn thành:", "info")
             for q in actionable:
-                self.process_quest(q)
-                summary["completed_now"].append(get_quest_name(q))
+                name = get_quest_name(q)
+                if self.process_quest(q):
+                    summary["completed_now"].append(name)
+                else:
+                    summary["not_completed"].append(
+                        {"name": name, "task": get_task_type(q)}
+                    )
         else:
             log("Không có quest nào cần hoàn thành lúc này", "info")
 

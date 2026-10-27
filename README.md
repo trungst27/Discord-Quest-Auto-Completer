@@ -66,6 +66,8 @@ Tính năng trong bảng dưới đây chạy được cả hai cách: `main.py`
 
 Cấu hình `/quest set` lưu theo từng user và áp vào `main.py` trước mỗi chu kỳ:
 
+> **Báo hoàn thành chỉ khi quest thật sự xong.** Handler trả `True`/`False`; quest lạ, thiếu thời lượng, hay lỗi giữa đường hiện `⚠ chưa xong` và được thử lại chu kỳ sau. Task name mới của Discord được nhận theo shape, rồi phân loại theo họ (`video` / `heartbeat` / `activity`).
+
 | Key | Mặc định | Khoảng | Nghĩa |
 |---|---|---|---|
 | `interval` | 300 | 60–3600 | giây giữa các lần quét |
